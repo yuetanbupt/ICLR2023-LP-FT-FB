@@ -3,6 +3,7 @@ from __future__ import print_function
 import argparse
 import csv
 import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "3"
 import collections
 import pickle
 import random
@@ -78,10 +79,10 @@ if __name__ == '__main__':
 
     loadfile_base = configs.data_dir[params.dataset] + 'base.json'
     loadfile_novel = configs.data_dir[params.dataset] + 'novel.json'
-    if params.dataset == 'miniImagenet' or params.dataset == 'CUB':
+    if params.dataset == 'miniImagenet' or params.dataset == 'CUB' or params.dataset == 'tiered_imagenet':
         datamgr       = SimpleDataManager(84, batch_size = 256)
     base_loader = datamgr.get_data_loader(loadfile_base, aug=False)
-    novel_loader      = datamgr.get_data_loader(loadfile_novel, aug = False)
+    novel_loader = datamgr.get_data_loader(loadfile_novel, aug = False)
 
     checkpoint_dir = '%s/checkpoints/%s/%s_%s' %(configs.save_dir, params.dataset, params.model, params.method)
     modelfile   = get_resume_file(checkpoint_dir)
@@ -96,6 +97,11 @@ if __name__ == '__main__':
     checkpoint = torch.load(modelfile)
     state = checkpoint['state']
     state_keys = list(state.keys())
+    if params.dataset == 'tiered_imagenet':
+        for key in state_keys:
+            if 'classifier' in key:
+                new_key = key.replace('classifier', 'linear')
+                state[new_key] = state.pop(key)
 
     callwrap = False
     if 'module' in state_keys[0]:

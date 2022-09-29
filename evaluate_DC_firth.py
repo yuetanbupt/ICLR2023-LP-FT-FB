@@ -5,7 +5,7 @@ import numpy as np
 import torch
 from sklearn.linear_model import LogisticRegression
 from tqdm import tqdm
-from utils import LinearClassifier
+from utils import LinearClassifier, torch_logistic_reg_lbfgs_batch
 use_gpu = torch.cuda.is_available()
 
 RATE = 1
@@ -37,9 +37,9 @@ def normalization(features):
 
 if __name__ == '__main__':
     # ---- data loading
-    dataset = 'CUB'# 'miniImagenet'
-    n_shot = 1
-    n_ways = 5
+    dataset = 'miniImagenet'
+    n_shot = 5
+    n_ways = 10
     n_queries = 15
     n_runs = 1000
     n_lsamples = n_ways * n_shot
@@ -86,7 +86,7 @@ if __name__ == '__main__':
         sampled_label = []
         num_sampled = int(750/n_shot)
         for i in range(n_lsamples):
-            mean, cov = distribution_calibration(support_data[i], base_means, base_cov, k=2, alpha = 0.3)
+            mean, cov = distribution_calibration(support_data[i], base_means, base_cov, k=2)
             features = np.random.multivariate_normal(mean=mean, cov=cov, size=num_sampled)
             # selected_features = select_features(support_data[i], features)
             sampled_data.append(features)
@@ -96,15 +96,25 @@ if __name__ == '__main__':
         # X_aug = normalization(X_aug)
         Y_aug = np.concatenate([support_label, sampled_label])
         # ---- train classifier
-        classifier = LogisticRegression(max_iter=1000).fit(X=X_aug, y=Y_aug)
-        query_data = normalization(query_data)
-        predicts = classifier.predict(query_data)
-        ##########################################################################################################
-        # linear_classifier = LinearClassifier(n_way = n_ways, n_support = n_shot, save_tar = False)
+        ###############################################################
+        # classifier = LogisticRegression(max_iter=1000).fit(X=X_aug, y=Y_aug)
+        # query_data = normalization(query_data)
+        # predicts = classifier.predict(query_data)
+        ###############################################################
+        # linear_classifier = LinearClassifier(n_way = n_ways, n_support = n_shot)
         # scores = linear_classifier(X_aug, Y_aug, query_data)
         # scores = scores.detach().cpu().numpy()
         # predicts = np.argmax(scores, axis = -1)
-        acc = np.mean(predicts == query_label)
+        ################################################################
+        X_aug = torch.FloatTensor(X_aug).unsqueeze(0).cuda()
+        Y_aug = torch.LongTensor(Y_aug).unsqueeze(0).cuda()
+        firth_linearclassifier = torch_logistic_reg_lbfgs_batch(X_aug, Y_aug, 0.0, 100, verbose=False)
+        with torch.no_grad():
+            query_data = torch.FloatTensor(query_data).cuda()
+            query_label = torch.LongTensor(query_label).cuda()
+            predicts = firth_linearclassifier(query_data).argmax(dim=-1)
+            acc = (predicts == query_label).double().mean(dim=(-1)).detach().cpu().numpy().ravel()
+        # acc = np.mean(predicts == query_label)
         acc_list.append(acc)
         print('%s %d way %d shot  ACC : %f'%(dataset,n_ways,n_shot,float(np.mean(acc_list))))
     print('%s %d way %d shot  ACC : %f'%(dataset,n_ways,n_shot,float(np.mean(acc_list))))

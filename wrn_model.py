@@ -203,6 +203,24 @@ class WideResNet(nn.Module):
             out1 = self.linear(out)
             return out, out1
         
+    def zero_grad(self, params=None):
+        if params is None:
+            for param in self.parameters():
+                if (
+                    param.requires_grad == True
+                    and param.grad is not None
+                    and torch.sum(param.grad) > 0
+                ):
+                    param.grad.zero_()
+        else:
+            for name, param in params.items():
+                if (
+                    param.requires_grad == True
+                    and param.grad is not None
+                    and torch.sum(param.grad) > 0
+                ):
+                    param.grad.zero_()
+                    params[name].grad = None
                   
         
 def wrn28_10(num_classes=200 , loss_type = 'dist'):

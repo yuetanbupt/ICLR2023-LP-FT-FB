@@ -87,8 +87,7 @@ def GenerateRun(iRun, cfg, regenRState=False, generate=True):
     for i in range(cfg['ways']):
         shuffle_indices = np.random.permutation(shuffle_indices)
         if generate:
-            dataset[i] = data[classes[i], shuffle_indices,
-                              :][:cfg['shot']+cfg['queries']]
+            dataset[i] = data[classes[i], shuffle_indices, :][:cfg['shot']+cfg['queries']]
 
     return dataset
 
@@ -146,17 +145,21 @@ def GenerateRunSet(start=None, end=None, cfg=None):
 if __name__ == "__main__":
 
     print("Testing Task loader for Few Shot Learning")
-    loadDataSet('miniimagenet')
+    loadDataSet('miniImagenet')
 
     cfg = {"shot": 1, "ways": 5, "queries": 15}
     setRandomStates(cfg)
 
-    run10 = GenerateRun(10, cfg)
-    print("First call:", run10[:2, :2, :2])
+    run10 = GenerateRunSet(0, 1000, cfg)
+    
+    # ndatas = run10.permute(0, 2, 1, 3).reshape(1000, 16, -1)
+    print("First call:", run10.shape)# [:2, :2, :2])
 
+    '''
     run10 = GenerateRun(10, cfg)
-    print("Second call:", run10[:2, :2, :2])
+    print("Second call:", run10.shape)# [:2, :2, :2])
 
     ds = GenerateRunSet(start=2, end=12, cfg=cfg)
-    print("Third call:", ds[8, :2, :2, :2])
+    print("Third call:", ds.shape)# [8, :2, :2, :2])
     print(ds.size())
+    '''

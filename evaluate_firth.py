@@ -1,13 +1,21 @@
 import pickle
 import os 
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import numpy as np
 import torch
 from sklearn.linear_model import LogisticRegression
 from tqdm import tqdm
-from utils import LinearClassifier
-use_gpu = torch.cuda.is_available()
+from utils import Proto_classifier, LinearClassifier, select_features, torch_logistic_reg_lbfgs_batch
+import argparse
 
+parser = argparse.ArgumentParser()
+parser.add_argument('--eps', default=1e-2, type=float, help='covariance scale')
+parser.add_argument('--alpha', default=0.21, type=float, help='covariance alpha')
+params = parser.parse_args()
+EPS = params.eps
+ALPHA = params.alpha
+
+use_gpu = torch.cuda.is_available()
 RATE = 1
 def distribution_calibration(query, base_means, base_cov, k,alpha=0.21):
     dist = []
@@ -16,31 +24,33 @@ def distribution_calibration(query, base_means, base_cov, k,alpha=0.21):
     index = np.argpartition(dist, k)[:k]
     mean = np.concatenate([np.array(base_means)[index], query[np.newaxis, :]])
     calibrated_mean = np.mean(mean, axis=0)
-    # calibrated_mean = 0.1 * mean[0] + 0.1 * mean[1] + 0.8 * mean[2]
     calibrated_cov = np.mean(np.array(base_cov)[index], axis=0)+alpha
 
     return calibrated_mean, calibrated_cov
 
-def select_features(query, features, rate = RATE):
-    dist = []
-    k = int(len(features) * rate)
-    for i in range(len(features)):
-        dist.append(np.linalg.norm(query-features[i]))
-    index = np.argpartition(dist, k)[:k]
-    selected_features = features[index]
-    return selected_features
+def get_coords_pinv(query, base_means, k):
+    query = query[np.newaxis, :]
+    base_means = np.array(base_means)
+    A_pinv = np.linalg.pinv(base_means)
+    coords = np.squeeze(query @ A_pinv)
+    mask = np.zeros_like(coords)
+    index = np.argpartition(np.abs(coords), -k)[-k:]
+    mask[index] = 1
+    coords *= mask
+    return coords
 
-def normalization(features):
-    features_norm = np.linalg.norm(features, axis = 1, ord = 2, keepdims = True)
-    features = features / features_norm
-    return features
+def sample_coords(coords, num_sampled, eps = 1e-2, alpha = 0.21):
+    mean = coords
+    cov = np.eye(coords.shape[0]) * eps + alpha
+    coord_samples = np.random.multivariate_normal(mean = mean, cov = cov, size = num_sampled)
+    return coord_samples
 
 if __name__ == '__main__':
     # ---- data loading
-    dataset = 'CUB'# 'miniImagenet'
+    dataset = 'miniImagenet'
     n_shot = 1
     n_ways = 5
-    n_queries = 15
+    n_queries = 599
     n_runs = 1000
     n_lsamples = n_ways * n_shot
     n_usamples = n_ways * n_queries
@@ -78,6 +88,7 @@ if __name__ == '__main__':
         query_data = ndatas[i][n_lsamples:].numpy()
         query_label = labels[i][n_lsamples:].numpy()
         # ---- Tukey's transform
+        '''
         beta = 0.5
         support_data = np.power(support_data[:, ] ,beta)
         query_data = np.power(query_data[:, ] ,beta)
@@ -86,26 +97,49 @@ if __name__ == '__main__':
         sampled_label = []
         num_sampled = int(750/n_shot)
         for i in range(n_lsamples):
-            mean, cov = distribution_calibration(support_data[i], base_means, base_cov, k=2, alpha = 0.3)
+            mean, cov = distribution_calibration(support_data[i], base_means, base_cov, k=2)
             features = np.random.multivariate_normal(mean=mean, cov=cov, size=num_sampled)
-            # selected_features = select_features(support_data[i], features)
             sampled_data.append(features)
             sampled_label.extend([support_label[i]] * int(num_sampled*RATE))
         sampled_data = np.concatenate([sampled_data[:]]).reshape(n_ways * n_shot * int(num_sampled * RATE), -1)
         X_aug = np.concatenate([support_data, sampled_data])
-        # X_aug = normalization(X_aug)
         Y_aug = np.concatenate([support_label, sampled_label])
+        '''
         # ---- train classifier
-        classifier = LogisticRegression(max_iter=1000).fit(X=X_aug, y=Y_aug)
-        query_data = normalization(query_data)
-        predicts = classifier.predict(query_data)
-        ##########################################################################################################
-        # linear_classifier = LinearClassifier(n_way = n_ways, n_support = n_shot, save_tar = False)
+        #################################################################
+        X_aug = support_data
+        Y_aug = support_label
+        # classifier = LogisticRegression(max_iter=1000).fit(X=X_aug, y=Y_aug)
+
+        # predicts = classifier.predict(query_data)
+        #################################################################
+        # scores = Proto_classifier(X_aug, Y_aug, query_data, 'mahalanobis')
+        # predicts = np.argmax(scores, axis = -1)
+        #################################################################
+        # linear_classifier = LinearClassifier(n_way = n_ways, n_support = n_shot)
         # scores = linear_classifier(X_aug, Y_aug, query_data)
         # scores = scores.detach().cpu().numpy()
         # predicts = np.argmax(scores, axis = -1)
-        acc = np.mean(predicts == query_label)
+        ##################################################################
+        # X_aug = torch.FloatTensor(X_aug).unsqueeze(0).cuda()
+        # Y_aug = torch.LongTensor(Y_aug).unsqueeze(0).cuda()
+        # firth_linearclassifier = torch_logistic_reg_lbfgs_batch(X_aug, Y_aug, 0.0, 100, verbose=False, loss_type = 'dist')
+        firth_linearclassifier = LinearClassifier(n_way = n_ways, n_support = n_shot)
+        predicts = firth_linearclassifier(X_aug, Y_aug, query_data, firth_c = True).detach().cpu().numpy()
+        with torch.no_grad():
+            # query_data = torch.FloatTensor(query_data).cuda()
+            # query_label = torch.LongTensor(query_label).cuda()
+
+            # predicts = firth_linearclassifier(query_data).argmax(dim=-1)
+            # acc = (predicts == query_label).double().mean(dim=(-1)).detach().cpu().numpy().ravel()
+            predicts = np.argmax(predicts, axis = -1)
+            acc = np.mean(predicts == query_label)
+
+        # acc = np.mean(predicts == query_label)
         acc_list.append(acc)
         print('%s %d way %d shot  ACC : %f'%(dataset,n_ways,n_shot,float(np.mean(acc_list))))
     print('%s %d way %d shot  ACC : %f'%(dataset,n_ways,n_shot,float(np.mean(acc_list))))
-
+    filename = os.path.join('record', 'results_eps_' + str(EPS) + '_alpha_' + str(ALPHA) + '.txt')
+    with open(filename, 'w') as f:
+        f.write('%s %d way %d shot  ACC : %f'%(dataset,n_ways,n_shot,float(np.mean(acc_list))))
+        f.close()
